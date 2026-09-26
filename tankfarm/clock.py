@@ -18,6 +18,12 @@ class LogicalClock:
         self._value += step
         return self._value
 
+    def advance_to(self, value: int) -> int:
+        """Move the clock forward to ``value``; never move it backwards."""
+
+        self._value = max(self._value, int(value))
+        return self._value
+
     def age(self, since: int) -> int:
         return self._value - since
 

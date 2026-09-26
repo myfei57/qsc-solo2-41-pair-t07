@@ -14,6 +14,19 @@ class IdFactory:
         self._counters[prefix] = count
         return f"{prefix}-{count:06d}"
 
+    def resume(self, prefix: str, identifier: str) -> None:
+        """Advance the counter past an identifier restored from storage."""
+
+        expected = f"{prefix}-"
+        if not identifier.startswith(expected):
+            return
+        try:
+            count = int(identifier[len(expected) :])
+        except ValueError:
+            return
+        if count > self._counters.get(prefix, 0):
+            self._counters[prefix] = count
+
     def counters(self) -> dict[str, int]:
         return dict(self._counters)
 

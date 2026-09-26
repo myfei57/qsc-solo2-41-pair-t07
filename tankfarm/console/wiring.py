@@ -24,6 +24,7 @@ from tankfarm.esd.test import TestController
 from tankfarm.esd.trip import TripController, TripResult
 from tankfarm.esd.valve import EsdValve
 from tankfarm.event import EventBus
+from tankfarm.event import Event
 from tankfarm.event import topics
 from tankfarm.ids import IdFactory
 from tankfarm.inert.latch import VentLatch
@@ -204,6 +205,12 @@ class Services:
         self.capacity = CapacityEstimator(self.tanks, self.levels)
         self.auditor = AuditLog(self.repository, self.bus, self.ids, self.clock)
         self.auditor.subscribe()
+        # The audit trail is a compliance log, not derived state: it is always
+        # loaded on startup, even without replay, and timestamps must not move
+        # backwards after a restart.
+        self.auditor.restore()
+        if self.auditor.entries():
+            self.clock.advance_to(max(entry.ts for entry in self.auditor.entries()))
         self.audit = AuditQuery(self.auditor)
         self.last_replay: ReplayResult | None = None
 
@@ -253,7 +260,14 @@ class Services:
         self._apply_projection()
 
     def restore(self) -> ReplayResult | None:
+        # The audit trail is an independent append-only log: load it first so
+        # it is available even when the journal is empty, and never re-create
+        # entries while replaying the record stream.
+        self.auditor.restore()
         records = self.repository.load_records()
+        if records:
+            latest_ts = max(record.ts for record in records)
+            self.clock.advance_to(latest_ts)
         if not records:
             return None
         self.stream.load(records)
@@ -499,6 +513,13 @@ class Services:
                 "settings": settings.as_payload(),
             },
         )
+        self.bus.publish(
+            Event(
+                topics.CONFIG_REVISED,
+                {"generation": revision.generation},
+                self.clock.now(),
+            )
+        )
         self.commit()
         return revision.as_payload()
 
@@ -516,6 +537,17 @@ class Services:
                 "tank_id": registration.tank_id,
                 "generation": registration.generation,
             },
+        )
+        self.bus.publish(
+            Event(
+                topics.BATCH_REGISTERED,
+                {
+                    "batch_id": registration.batch_id,
+                    "tank_id": registration.tank_id,
+                    "generation": registration.generation,
+                },
+                self.clock.now(),
+            )
         )
         self.commit()
         return registration
