@@ -28,11 +28,13 @@ def summarize(entries: Iterable[AuditEntry]) -> AuditSummary:
     by_kind: dict[str, int] = {}
     by_subject: dict[str, int] = {}
     latest: AuditEntry | None = None
+    total = 0
     for entry in entries:
+        total += 1
         by_kind[entry.kind] = by_kind.get(entry.kind, 0) + 1
         by_subject[entry.subject] = by_subject.get(entry.subject, 0) + 1
         if latest is None or entry.seq > latest.seq:
             latest = entry
     return AuditSummary(
-        total=len(by_subject), by_kind=by_kind, by_subject=by_subject, latest=latest
+        total=total, by_kind=by_kind, by_subject=by_subject, latest=latest
     )

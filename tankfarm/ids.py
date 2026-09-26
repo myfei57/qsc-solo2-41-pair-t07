@@ -14,6 +14,12 @@ class IdFactory:
         self._counters[prefix] = count
         return f"{prefix}-{count:06d}"
 
+    def seed(self, prefix: str, count: int) -> None:
+        """Advances the prefix counter to at least ``count`` (restore support)."""
+
+        if count > self._counters.get(prefix, 0):
+            self._counters[prefix] = int(count)
+
     def counters(self) -> dict[str, int]:
         return dict(self._counters)
 

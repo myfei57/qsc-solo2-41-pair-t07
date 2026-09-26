@@ -120,6 +120,11 @@ class Services:
         self.journal = JournalWriter(self.stream, self.repository, self.clock)
         self.rollbacks = RollbackService(self.journal, self.commits, self.tombstones)
         self.bus = EventBus()
+        self.auditor = AuditLog(self.repository, self.bus, self.ids, self.clock)
+        # Historical traces must survive a process restart even when the
+        # journal is not replayed, so the audit log reloads on construction.
+        self.auditor.restore()
+        self.auditor.observe_journal(self.journal)
         self.sheets = SheetBook(self.ids)
         self.baselines = BaselineBook()
         self.snapshots = SnapshotBook(self.ids)
@@ -202,8 +207,6 @@ class Services:
             self.clock,
         )
         self.capacity = CapacityEstimator(self.tanks, self.levels)
-        self.auditor = AuditLog(self.repository, self.bus, self.ids, self.clock)
-        self.auditor.subscribe()
         self.audit = AuditQuery(self.auditor)
         self.last_replay: ReplayResult | None = None
 
@@ -253,8 +256,10 @@ class Services:
         self._apply_projection()
 
     def restore(self) -> ReplayResult | None:
+        self.auditor.restore()
         records = self.repository.load_records()
         if not records:
+            self._restore_clock(0)
             return None
         self.stream.load(records)
         for record in records:
@@ -266,6 +271,7 @@ class Services:
         if checkpoint is None:
             self.projection = self.project(0)
             self._apply_projection()
+            self._restore_clock(0, records=records)
             return None
         self.projection = StateProjection.from_snapshot(checkpoint.state)
         self.watermark.advance_to(checkpoint.watermark)
@@ -277,8 +283,19 @@ class Services:
             self.projection.apply,
         )
         self._apply_projection()
+        self._restore_clock(checkpoint.ts, records=records)
         self.last_replay = result
         return result
+
+    def _restore_clock(self, checkpoint_ts: int, records: object = ()) -> None:
+        """Keeps the logical clock ahead of every persisted timestamp."""
+
+        latest = checkpoint_ts
+        for record in records:
+            latest = max(latest, record.ts)
+        for entry in self.auditor.entries():
+            latest = max(latest, entry.ts)
+        self.clock.advance_to(latest)
 
     def history(self, watermark: int | None = None) -> dict[str, object]:
         limit = self.commits.watermark() if watermark is None else int(watermark)

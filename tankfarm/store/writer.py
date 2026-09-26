@@ -32,6 +32,8 @@ class AtomicWriter:
             with path.open("a", encoding="utf-8") as handle:
                 handle.write(line)
                 handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
         except OSError as exc:  # pragma: no cover - depends on the file system
             raise StoreError(str(path), str(exc)) from exc
 

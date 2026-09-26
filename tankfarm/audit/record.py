@@ -1,4 +1,4 @@
-"""Audit entries and the log that subscribes to the event bus."""
+"""Audit entries and the log that observes the durable record stream."""
 
 from __future__ import annotations
 
@@ -6,9 +6,11 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from tankfarm.clock import LogicalClock
-from tankfarm.event import Event, EventBus
+from tankfarm.event import EventBus
 from tankfarm.event.topics import AUDITED_TOPICS
 from tankfarm.ids import IdFactory
+from tankfarm.journal.record import Record
+from tankfarm.judgement.filters import subject_from_payload
 from tankfarm.store.repository import Repository
 
 @dataclass(frozen=True)
@@ -30,13 +32,27 @@ class AuditEntry:
             "seq": self.seq,
             "kind": self.kind,
             "subject": self.subject,
-            "tank_id": self.subject,
             "message": self.message,
             "ts": self.ts,
         }
 
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "AuditEntry":
+        return cls(
+            entry_id=str(payload["entry_id"]),
+            seq=int(payload["seq"]),
+            kind=str(payload["kind"]),
+            subject=str(payload.get("subject", "")),
+            message=str(payload.get("message", "")),
+            ts=int(payload["ts"]),
+        )
+
 class AuditLog:
-    """Turns every published event into one durable audit entry."""
+    """Turns every durable action record into one append-only audit entry.
+
+    Repeated actions on the same device each leave their own trace, and the
+    on-disk log is reloaded on restart.
+    """
 
     def __init__(
         self,
@@ -51,34 +67,50 @@ class AuditLog:
         self._clock = clock
         self._entries: list[AuditEntry] = []
 
-    def subscribe(self) -> None:
-        for topic in AUDITED_TOPICS:
-            self._bus.subscribe(topic, self._on_event)
+    def observe_journal(self, journal: Any) -> None:
+        """Feeds each durable action record into the audit trail."""
+
+        journal.add_observer(self._on_record)
 
     def entries(self) -> tuple[AuditEntry, ...]:
         return tuple(self._entries)
 
-    def record(self, kind: str, subject: str, message: str) -> AuditEntry:
+    def restore(self) -> int:
+        """Reloads audit entries written by earlier process runs."""
+
+        entries = [AuditEntry.from_payload(item) for item in self._repository.load_audit()]
+        entries.sort(key=lambda item: item.seq)
+        self._entries = entries
+        for entry in entries:
+            # Keep the id factory counters consistent so new entries never
+            # reuse identifiers owned by restored entries.
+            self._ids.seed("audit", _numeric_suffix(entry.entry_id))
+        return len(entries)
+
+    def record(self, kind: str, subject: str, message: str, ts: int | None = None) -> AuditEntry:
         entry = AuditEntry(
             entry_id=self._ids.new("audit"),
             seq=len(self._entries) + 1,
             kind=kind,
             subject=subject,
             message=message,
-            ts=self._clock.now(),
+            ts=self._clock.now() if ts is None else int(ts),
         )
-        for index, existing in enumerate(self._entries):
-            if existing.kind == kind and existing.subject == subject:
-                self._entries[index] = entry
-                break
-        else:
-            self._entries.append(entry)
+        self._entries.append(entry)
         self._repository.append_audit(entry.as_payload())
         return entry
 
-    def _on_event(self, event: Event) -> None:
-        payload = event.value if isinstance(event.value, Mapping) else {}
-        self.record(event.topic, "", _describe(event.topic, payload))
+    def _on_record(self, record: Record) -> None:
+        if record.kind not in AUDITED_TOPICS:
+            return
+        payload = dict(record.payload)
+        subject = subject_from_payload(payload)
+        self.record(record.kind, subject, _describe(record.kind, payload), record.ts)
+
+
+def _numeric_suffix(entry_id: str) -> int:
+    head, _, raw = entry_id.rpartition("-")
+    return int(raw) if head and raw.isdigit() else 0
 
 
 def _describe(topic: str, payload: Mapping[str, Any]) -> str:

@@ -35,12 +35,21 @@ def _text(source: Mapping[str, Any], key: str, default: str = "") -> str:
 def _record_filter(source: Mapping[str, Any]) -> RecordFilter:
     raw_kinds = _text(source, "kind") or _text(source, "kinds")
     kinds = tuple(part for part in raw_kinds.split(",") if part)
-    subject = _text(source, "subject")
+    subject = (
+        _text(source, "subject")
+        or _text(source, "device")
+        or _text(source, "device_id")
+        or _text(source, "valve_id")
+        or _text(source, "pump_id")
+        or _text(source, "tank_id")
+    )
     return RecordFilter(
         kinds=kinds,
         subject=subject or None,
         min_seq=_int(source, "min_seq", 0),
         max_seq=_int(source, "max_seq", 0),
+        start_ts=_int(source, "start_ts", 0) or _int(source, "from", 0),
+        end_ts=_int(source, "end_ts", 0) or _int(source, "to", 0),
         limit=_int(source, "limit", 0),
     )
 

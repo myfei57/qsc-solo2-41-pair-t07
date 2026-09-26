@@ -175,3 +175,29 @@ def test_baseline_endpoint_exposes_generation(client):
     assert status == 200
     assert body["generation"] == 0
 
+
+
+def test_audit_endpoint_filters_by_device_kind_and_time_window(client):
+    client.post("/api/valve/open", {"valve_id": VALVE_VENT})
+    _, opened = client.get("/api/clock")
+    client.post("/api/clock/tick", {"steps": 5})
+    client.post("/api/valve/close", {"valve_id": VALVE_VENT})
+    client.post("/api/valve/open", {"valve_id": "valve-tank-new"})
+
+    # device alias must restrict to that one device
+    status, body = client.get("/api/audit", device=VALVE_VENT)
+    assert status == 200
+    assert body["count"] == 2
+    assert {item["subject"] for item in body["entries"]} == {VALVE_VENT}
+
+    # device + category + start_ts combined
+    status, body = client.get(
+        "/api/audit",
+        device=VALVE_VENT,
+        kind=topics.VALVE_POSITION,
+        start_ts=opened["now"] + 1,
+    )
+    assert status == 200
+    assert body["count"] == 1
+    assert body["entries"][0]["subject"] == VALVE_VENT
+    assert body["entries"][0]["ts"] >= opened["now"] + 1

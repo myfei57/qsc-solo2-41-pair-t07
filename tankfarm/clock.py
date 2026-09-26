@@ -18,6 +18,13 @@ class LogicalClock:
         self._value += step
         return self._value
 
+    def advance_to(self, value: int) -> int:
+        """Forwards the clock to at least ``value`` (used when restoring)."""
+
+        if value > self._value:
+            self._value = int(value)
+        return self._value
+
     def age(self, since: int) -> int:
         return self._value - since
 

@@ -19,5 +19,7 @@ class AuditQuery:
         return tuple(sorted({entry.kind for entry in self._log.entries()}))
 
     def subjects(self) -> tuple[str, ...]:
-        return tuple(sorted({entry.subject for entry in self._log.entries()}))
+        return tuple(
+            sorted({entry.subject for entry in self._log.entries() if entry.subject})
+        )
 
